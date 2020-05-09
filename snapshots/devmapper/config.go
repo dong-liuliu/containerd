@@ -37,9 +37,15 @@ type Config struct {
 	// Name for 'thin-pool' device to be used by snapshotter (without /dev/mapper/ prefix)
 	PoolName string `toml:"pool_name"`
 
+	// Prefix of the thin-pool device, if it is not "/dev/mapper"
+	PoolDir string `toml:"pool_path"`
+
 	// Defines how much space to allocate when creating base image for container
 	BaseImageSize      string `toml:"base_image_size"`
 	BaseImageSizeBytes uint64 `toml:"-"`
+
+	// Specify block service provider: dmsetup or SPDK vhost-target
+	BlockProvider string `toml:"block_provider"`
 }
 
 // LoadConfig reads devmapper configuration file from disk in TOML format

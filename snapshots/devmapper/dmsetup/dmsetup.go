@@ -35,6 +35,8 @@ const (
 	SectorSize = 512
 )
 
+type DmProvider struct{}
+
 // DeviceInfo represents device info returned by "dmsetup info".
 // dmsetup(8) provides more information on each of these fields.
 type DeviceInfo struct {
@@ -61,8 +63,27 @@ func init() {
 	}
 }
 
+func (dm *DmProvider) Close() {
+}
+func (dm *DmProvider) ProviderName() string {
+	return "dmsetup"
+}
+func (dm *DmProvider) DevHosting(devPath string) (string, error) {
+	return devPath, nil
+}
+func (dm *DmProvider) UnDevHosting(devHostPath string) error {
+	return nil
+}
+func (dm *DmProvider) GetFullPoolPath(poolDir, poolName string) string {
+	return dm.GetFullDevicePath(poolName)
+}
+
+func (dm *DmProvider) RemovePool(PoolName string, opts ...DeactDeviceOpt) error {
+	return dm.DeactivateDevice(PoolName, opts...)
+}
+
 // CreatePool creates a device with the given name, data and metadata file and block size (see "dmsetup create")
-func CreatePool(poolName, dataFile, metaFile string, blockSizeSectors uint32) error {
+func (dm *DmProvider) CreatePool(poolName, dataFile, metaFile string, blockSizeSectors uint32) error {
 	thinPool, err := makeThinPoolMapping(dataFile, metaFile, blockSizeSectors)
 	if err != nil {
 		return err
@@ -73,7 +94,7 @@ func CreatePool(poolName, dataFile, metaFile string, blockSizeSectors uint32) er
 }
 
 // ReloadPool reloads existing thin-pool (see "dmsetup reload")
-func ReloadPool(deviceName, dataFile, metaFile string, blockSizeSectors uint32) error {
+func (dm *DmProvider) ReloadPool(deviceName, dataFile, metaFile string, blockSizeSectors uint32) error {
 	thinPool, err := makeThinPoolMapping(dataFile, metaFile, blockSizeSectors)
 	if err != nil {
 		return err
@@ -117,13 +138,13 @@ func makeThinPoolMapping(dataFile, metaFile string, blockSizeSectors uint32) (st
 }
 
 // CreateDevice sends "create_thin <deviceID>" message to the given thin-pool
-func CreateDevice(poolName string, deviceID uint32) error {
+func (dm *DmProvider) CreateDevice(poolName string, deviceID uint32) error {
 	_, err := dmsetup("message", poolName, "0", fmt.Sprintf("create_thin %d", deviceID))
 	return err
 }
 
 // ActivateDevice activates the given thin-device using the 'thin' target
-func ActivateDevice(poolName string, deviceName string, deviceID uint32, size uint64, external string) error {
+func (dm *DmProvider) ActivateDevice(poolName string, deviceName string, deviceID uint32, size uint64, external string) error {
 	mapping := makeThinMapping(poolName, deviceID, size, external)
 	_, err := dmsetup("create", deviceName, "--table", mapping)
 	return err
@@ -132,6 +153,7 @@ func ActivateDevice(poolName string, deviceName string, deviceID uint32, size ui
 // makeThinMapping makes thin target table entry
 func makeThinMapping(poolName string, deviceID uint32, sizeBytes uint64, externalOriginDevice string) string {
 	lengthSectors := sizeBytes / SectorSize
+	var dm *DmProvider
 
 	// Thin target has the following format:
 	// start - starting block in virtual device
@@ -139,57 +161,57 @@ func makeThinMapping(poolName string, deviceID uint32, sizeBytes uint64, externa
 	// pool_dev - the thin-pool device, can be /dev/mapper/pool_name or 253:0
 	// dev_id - the internal device id of the device to be activated
 	// external_origin_dev - an optional block device outside the pool to be treated as a read-only snapshot origin.
-	target := fmt.Sprintf("0 %d thin %s %d %s", lengthSectors, GetFullDevicePath(poolName), deviceID, externalOriginDevice)
+	target := fmt.Sprintf("0 %d thin %s %d %s", lengthSectors, dm.GetFullDevicePath(poolName), deviceID, externalOriginDevice)
 	return strings.TrimSpace(target)
 }
 
 // SuspendDevice suspends the given device (see "dmsetup suspend")
-func SuspendDevice(deviceName string) error {
+func (dm *DmProvider) SuspendDevice(deviceName string) error {
 	_, err := dmsetup("suspend", deviceName)
 	return err
 }
 
 // ResumeDevice resumes the given device (see "dmsetup resume")
-func ResumeDevice(deviceName string) error {
+func (dm *DmProvider) ResumeDevice(deviceName string) error {
 	_, err := dmsetup("resume", deviceName)
 	return err
 }
 
 // Table returns the current table for the device
-func Table(deviceName string) (string, error) {
+func (dm *DmProvider) Table(deviceName string) (string, error) {
 	return dmsetup("table", deviceName)
 }
 
 // CreateSnapshot sends "create_snap" message to the given thin-pool.
 // Caller needs to suspend and resume device if it is active.
-func CreateSnapshot(poolName string, deviceID uint32, baseDeviceID uint32) error {
+func (dm *DmProvider) CreateSnapshot(poolName string, deviceID uint32, baseDeviceID uint32) error {
 	_, err := dmsetup("message", poolName, "0", fmt.Sprintf("create_snap %d %d", deviceID, baseDeviceID))
 	return err
 }
 
 // DeleteDevice sends "delete <deviceID>" message to the given thin-pool
-func DeleteDevice(poolName string, deviceID uint32) error {
+func (dm *DmProvider) DeleteDevice(poolName string, deviceID uint32) error {
 	_, err := dmsetup("message", poolName, "0", fmt.Sprintf("delete %d", deviceID))
 	return err
 }
 
-// RemoveDeviceOpt represents command line arguments for "dmsetup remove" command
-type RemoveDeviceOpt string
+// DeactDeviceOpt represents command line arguments for "dmsetup remove" command
+type DeactDeviceOpt string
 
 const (
 	// RemoveWithForce flag replaces the table with one that fails all I/O if
 	// open device can't be removed
-	RemoveWithForce RemoveDeviceOpt = "--force"
+	RemoveWithForce DeactDeviceOpt = "--force"
 	// RemoveWithRetries option will cause the operation to be retried
 	// for a few seconds before failing
-	RemoveWithRetries RemoveDeviceOpt = "--retry"
+	RemoveWithRetries DeactDeviceOpt = "--retry"
 	// RemoveDeferred flag will enable deferred removal of open devices,
 	// the device will be removed when the last user closes it
-	RemoveDeferred RemoveDeviceOpt = "--deferred"
+	RemoveDeferred DeactDeviceOpt = "--deferred"
 )
 
-// RemoveDevice removes a device (see "dmsetup remove")
-func RemoveDevice(deviceName string, opts ...RemoveDeviceOpt) error {
+// DeactivateDevice removes a device (see "dmsetup remove")
+func (dm *DmProvider) DeactivateDevice(deviceName string, opts ...DeactDeviceOpt) error {
 	args := []string{
 		"remove",
 	}
@@ -198,7 +220,7 @@ func RemoveDevice(deviceName string, opts ...RemoveDeviceOpt) error {
 		args = append(args, string(opt))
 	}
 
-	args = append(args, GetFullDevicePath(deviceName))
+	args = append(args, dm.GetFullDevicePath(deviceName))
 
 	_, err := dmsetup(args...)
 	if err == unix.ENXIO {
@@ -211,9 +233,13 @@ func RemoveDevice(deviceName string, opts ...RemoveDeviceOpt) error {
 	return err
 }
 
+//#dmsetup info --columns --noheadings -o name,blkdevname,attr,major,minor,open,segments,events --separator " "
+//fedora-swap dm-1 L--w 253 1 2 1 0
 // Info outputs device information (see "dmsetup info").
 // If device name is empty, all device infos will be returned.
-func Info(deviceName string) ([]*DeviceInfo, error) {
+// Info outputs device information (see "dmsetup info").
+// If device name is empty, all device infos will be returned.
+func (dm *DmProvider) Info(deviceName string) ([]*DeviceInfo, error) {
 	output, err := dmsetup(
 		"info",
 		"--columns",
@@ -264,9 +290,12 @@ func Info(deviceName string) ([]*DeviceInfo, error) {
 
 	return devices, nil
 }
+func (dm *DmProvider) InfoPool(deviceName string) ([]*DeviceInfo, error) {
+	return dm.Info(deviceName)
+}
 
 // Version returns "dmsetup version" output
-func Version() (string, error) {
+func (dm *DmProvider) Version() (string, error) {
 	return dmsetup("version")
 }
 
@@ -279,7 +308,7 @@ type DeviceStatus struct {
 }
 
 // Status provides status information for devmapper device
-func Status(deviceName string) (*DeviceStatus, error) {
+func status(deviceName string) (*DeviceStatus, error) {
 	var (
 		err    error
 		status DeviceStatus
@@ -317,8 +346,32 @@ func Status(deviceName string) (*DeviceStatus, error) {
 	return &status, nil
 }
 
+// GetUsage reports total size in bytes consumed by a thin-device.
+// It relies on the number of used blocks reported by 'dmsetup status'.
+// The output looks like:
+//  device2: 0 204800 thin 17280 204799
+// Where 17280 is the number of used sectors
+func (dm *DmProvider) GetUsage(deviceName string) (int64, error) {
+
+	status, err := status(deviceName)
+	if err != nil {
+		return 0, errors.Wrapf(err, "can't get status for device %q", deviceName)
+	}
+
+	if len(status.Params) == 0 {
+		return 0, errors.Errorf("failed to get the number of used blocks, unexpected output from dmsetup status")
+	}
+
+	count, err := strconv.ParseInt(status.Params[0], 10, 64)
+	if err != nil {
+		return 0, errors.Wrapf(err, "failed to parse status params: %q", status.Params[0])
+	}
+
+	return count * SectorSize, nil
+}
+
 // GetFullDevicePath returns full path for the given device name (like "/dev/mapper/name")
-func GetFullDevicePath(deviceName string) string {
+func (dm *DmProvider) GetFullDevicePath(deviceName string) string {
 	if strings.HasPrefix(deviceName, DevMapperDir) {
 		return deviceName
 	}

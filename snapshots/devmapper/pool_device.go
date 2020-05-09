@@ -21,7 +21,6 @@ package devmapper
 import (
 	"context"
 	"path/filepath"
-	"strconv"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
@@ -32,6 +31,7 @@ import (
 
 // PoolDevice ties together data and metadata volumes, represents thin-pool and manages volumes, snapshots and device ids.
 type PoolDevice struct {
+	provider blockProvider
 	poolName string
 	metadata *PoolMetadata
 }
@@ -40,14 +40,24 @@ type PoolDevice struct {
 // If pool 'poolName' already exists, it'll be reloaded with new parameters.
 func NewPoolDevice(ctx context.Context, config *Config) (*PoolDevice, error) {
 	log.G(ctx).Infof("initializing pool device %q", config.PoolName)
+	log.G(ctx).Infof("block provider of pool device is %q", config.BlockProvider)
 
-	version, err := dmsetup.Version()
+	poolDevice := &PoolDevice{}
+	var err error
+
+	poolDevice.provider, err = GetBlockProvider(config.BlockProvider)
 	if err != nil {
-		log.G(ctx).Errorf("dmsetup not available")
 		return nil, err
 	}
 
-	log.G(ctx).Infof("using dmsetup:\n%s", version)
+	name := poolDevice.provider.ProviderName()
+	version, err := poolDevice.provider.Version()
+	if err != nil {
+		log.G(ctx).Errorf("provider %s not available", name)
+		return nil, err
+	}
+
+	log.G(ctx).Infof("using %s: %s\n", name, version)
 
 	dbpath := filepath.Join(config.RootPath, config.PoolName+".db")
 	poolMetaStore, err := NewPoolMetadata(dbpath)
@@ -56,15 +66,13 @@ func NewPoolDevice(ctx context.Context, config *Config) (*PoolDevice, error) {
 	}
 
 	// Make sure pool exists and available
-	poolPath := dmsetup.GetFullDevicePath(config.PoolName)
-	if _, err := dmsetup.Info(poolPath); err != nil {
+	poolPath := poolDevice.provider.GetFullPoolPath(config.PoolDir, config.PoolName)
+	if _, err := poolDevice.provider.InfoPool(poolPath); err != nil {
 		return nil, errors.Wrapf(err, "failed to query pool %q", poolPath)
 	}
 
-	poolDevice := &PoolDevice{
-		poolName: config.PoolName,
-		metadata: poolMetaStore,
-	}
+	poolDevice.metadata = poolMetaStore
+	poolDevice.poolName = config.PoolName
 
 	if err := poolDevice.ensureDeviceStates(ctx); err != nil {
 		return nil, errors.Wrap(err, "failed to check devices state")
@@ -231,7 +239,7 @@ func (p *PoolDevice) CreateThinDevice(ctx context.Context, deviceName string, vi
 // createDevice creates thin device
 func (p *PoolDevice) createDevice(ctx context.Context, info *DeviceInfo) error {
 	if err := p.transition(ctx, info.Name, Creating, Created, func() error {
-		return dmsetup.CreateDevice(p.poolName, info.DeviceID)
+		return p.provider.CreateDevice(p.poolName, info.DeviceID)
 	}); err != nil {
 		return errors.Wrapf(err, "failed to create new thin device %q (dev: %d)", info.Name, info.DeviceID)
 	}
@@ -242,7 +250,7 @@ func (p *PoolDevice) createDevice(ctx context.Context, info *DeviceInfo) error {
 // activateDevice activates thin device
 func (p *PoolDevice) activateDevice(ctx context.Context, info *DeviceInfo) error {
 	if err := p.transition(ctx, info.Name, Activating, Activated, func() error {
-		return dmsetup.ActivateDevice(p.poolName, info.Name, info.DeviceID, info.Size, "")
+		return p.provider.ActivateDevice(p.poolName, info.Name, info.DeviceID, info.Size, "")
 	}); err != nil {
 		return errors.Wrapf(err, "failed to activate new thin device %q (dev: %d)", info.Name, info.DeviceID)
 	}
@@ -321,7 +329,7 @@ func (p *PoolDevice) CreateSnapshotDevice(ctx context.Context, deviceName string
 
 func (p *PoolDevice) createSnapshot(ctx context.Context, baseInfo, snapInfo *DeviceInfo) error {
 	if err := p.transition(ctx, snapInfo.Name, Creating, Created, func() error {
-		return dmsetup.CreateSnapshot(p.poolName, snapInfo.DeviceID, baseInfo.DeviceID)
+		return p.provider.CreateSnapshot(p.poolName, snapInfo.DeviceID, baseInfo.DeviceID)
 	}); err != nil {
 		return errors.Wrapf(err,
 			"failed to create snapshot %q (dev: %d) from %q (dev: %d)",
@@ -337,7 +345,7 @@ func (p *PoolDevice) createSnapshot(ctx context.Context, baseInfo, snapInfo *Dev
 // SuspendDevice flushes the outstanding IO and blocks the further IO
 func (p *PoolDevice) SuspendDevice(ctx context.Context, deviceName string) error {
 	if err := p.transition(ctx, deviceName, Suspending, Suspended, func() error {
-		return dmsetup.SuspendDevice(deviceName)
+		return p.provider.SuspendDevice(deviceName)
 	}); err != nil {
 		return errors.Wrapf(err, "failed to suspend device %q", deviceName)
 	}
@@ -351,7 +359,7 @@ func (p *PoolDevice) DeactivateDevice(ctx context.Context, deviceName string, de
 		return nil
 	}
 
-	opts := []dmsetup.RemoveDeviceOpt{dmsetup.RemoveWithRetries}
+	opts := []dmsetup.DeactDeviceOpt{dmsetup.RemoveWithRetries}
 	if deferred {
 		opts = append(opts, dmsetup.RemoveDeferred)
 	}
@@ -360,7 +368,7 @@ func (p *PoolDevice) DeactivateDevice(ctx context.Context, deviceName string, de
 	}
 
 	if err := p.transition(ctx, deviceName, Deactivating, Deactivated, func() error {
-		return dmsetup.RemoveDevice(deviceName, opts...)
+		return p.provider.DeactivateDevice(deviceName, opts...)
 	}); err != nil {
 		return errors.Wrapf(err, "failed to deactivate device %q", deviceName)
 	}
@@ -370,7 +378,7 @@ func (p *PoolDevice) DeactivateDevice(ctx context.Context, deviceName string, de
 
 // IsActivated returns true if thin-device is activated
 func (p *PoolDevice) IsActivated(deviceName string) bool {
-	infos, err := dmsetup.Info(deviceName)
+	infos, err := p.provider.Info(deviceName)
 	if err != nil || len(infos) != 1 {
 		// Couldn't query device info, device not active
 		return false
@@ -385,31 +393,13 @@ func (p *PoolDevice) IsActivated(deviceName string) bool {
 
 // IsLoaded returns true if thin-device is visible for dmsetup
 func (p *PoolDevice) IsLoaded(deviceName string) bool {
-	_, err := dmsetup.Info(deviceName)
+	_, err := p.provider.Info(deviceName)
 	return err == nil
 }
 
 // GetUsage reports total size in bytes consumed by a thin-device.
-// It relies on the number of used blocks reported by 'dmsetup status'.
-// The output looks like:
-//  device2: 0 204800 thin 17280 204799
-// Where 17280 is the number of used sectors
 func (p *PoolDevice) GetUsage(deviceName string) (int64, error) {
-	status, err := dmsetup.Status(deviceName)
-	if err != nil {
-		return 0, errors.Wrapf(err, "can't get status for device %q", deviceName)
-	}
-
-	if len(status.Params) == 0 {
-		return 0, errors.Errorf("failed to get the number of used blocks, unexpected output from dmsetup status")
-	}
-
-	count, err := strconv.ParseInt(status.Params[0], 10, 64)
-	if err != nil {
-		return 0, errors.Wrapf(err, "failed to parse status params: %q", status.Params[0])
-	}
-
-	return count * dmsetup.SectorSize, nil
+	return p.provider.GetUsage(deviceName)
 }
 
 // RemoveDevice completely wipes out thin device from thin-pool and frees it's device ID
@@ -438,7 +428,7 @@ func (p *PoolDevice) RemoveDevice(ctx context.Context, deviceName string) error 
 func (p *PoolDevice) deleteDevice(ctx context.Context, info *DeviceInfo) error {
 	if err := p.transition(ctx, info.Name, Removing, Removed, func() error {
 		// Send 'delete' message to thin-pool
-		return dmsetup.DeleteDevice(p.poolName, info.DeviceID)
+		return p.provider.DeleteDevice(p.poolName, info.DeviceID)
 	}); err != nil {
 		return errors.Wrapf(err, "failed to delete device %q (dev id: %d)", info.Name, info.DeviceID)
 	}
@@ -462,14 +452,16 @@ func (p *PoolDevice) RemovePool(ctx context.Context) error {
 		}
 	}
 
-	if err := dmsetup.RemoveDevice(p.poolName, dmsetup.RemoveWithForce, dmsetup.RemoveWithRetries, dmsetup.RemoveDeferred); err != nil {
+	if err := p.provider.RemovePool(p.poolName, dmsetup.RemoveWithForce, dmsetup.RemoveWithRetries, dmsetup.RemoveDeferred); err != nil {
 		result = multierror.Append(result, errors.Wrapf(err, "failed to remove pool %q", p.poolName))
 	}
 
 	return result.ErrorOrNil()
 }
 
+// TODO: whether spdk vhost should be closed here
 // Close closes pool device (thin-pool will not be removed)
 func (p *PoolDevice) Close() error {
+	p.provider.Close()
 	return p.metadata.Close()
 }

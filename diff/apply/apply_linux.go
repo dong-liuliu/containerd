@@ -70,6 +70,7 @@ func apply(ctx context.Context, mounts []mount.Mount, r io.Reader) error {
 		_, err = archive.Apply(ctx, path, r, opts...)
 		return err
 	}
+	// TODO: add vhost-user-blk option here to use nbd instead
 	return mount.WithTempMount(ctx, mounts, func(root string) error {
 		_, err := archive.Apply(ctx, root, r)
 		return err

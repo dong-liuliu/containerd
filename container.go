@@ -244,6 +244,7 @@ func (c *container) NewTask(ctx context.Context, ioCreate cio.Creator, opts ...N
 			return nil, err
 		}
 		for _, m := range mounts {
+			// TODO: (vhost) here mount source are added
 			request.Rootfs = append(request.Rootfs, &types.Mount{
 				Type:    m.Type,
 				Source:  m.Source,

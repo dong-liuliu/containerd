@@ -31,7 +31,8 @@ import (
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/snapshots"
-	"github.com/containerd/containerd/snapshots/devmapper/dmsetup"
+
+	//"github.com/containerd/containerd/snapshots/devmapper/dmsetup"
 	"github.com/containerd/containerd/snapshots/storage"
 	"github.com/hashicorp/go-multierror"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -175,6 +176,7 @@ func (s *Snapshotter) Usage(ctx context.Context, key string) (snapshots.Usage, e
 
 		if info.Kind == snapshots.KindActive {
 			deviceName := s.getDeviceName(id)
+
 			usage.Size, err = s.pool.GetUsage(deviceName)
 			if err != nil {
 				return err
@@ -399,11 +401,16 @@ func (s *Snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 // mkfs creates ext4 filesystem on the given devmapper device
 func (s *Snapshotter) mkfs(ctx context.Context, deviceName string) error {
+
+	devHostPath := s.pool.provider.GetFullDevicePath(deviceName)
+	devHostPath, err := s.pool.provider.DevHosting(devHostPath)
+	defer s.pool.provider.UnDevHosting(devHostPath)
+
 	args := []string{
 		"-E",
 		// We don't want any zeroing in advance when running mkfs on thin devices (see "man mkfs.ext4")
 		"nodiscard,lazy_itable_init=0,lazy_journal_init=0",
-		dmsetup.GetFullDevicePath(deviceName),
+		devHostPath,
 	}
 
 	log.G(ctx).Debugf("mkfs.ext4 %s", strings.Join(args, " "))
@@ -424,7 +431,8 @@ func (s *Snapshotter) getDeviceName(snapID string) string {
 
 func (s *Snapshotter) getDevicePath(snap storage.Snapshot) string {
 	name := s.getDeviceName(snap.ID)
-	return dmsetup.GetFullDevicePath(name)
+
+	return s.pool.provider.GetFullDevicePath(name)
 }
 
 func (s *Snapshotter) buildMounts(snap storage.Snapshot) []mount.Mount {
