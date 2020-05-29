@@ -393,8 +393,12 @@ func (p *PoolDevice) IsActivated(deviceName string) bool {
 
 // IsLoaded returns true if thin-device is visible for dmsetup
 func (p *PoolDevice) IsLoaded(deviceName string) bool {
-	_, err := p.provider.Info(deviceName)
-	return err == nil
+	if false {
+		_, err := p.provider.Info(deviceName)
+		return err == nil
+	}
+
+	return p.IsActivated(deviceName)
 }
 
 // GetUsage reports total size in bytes consumed by a thin-device.

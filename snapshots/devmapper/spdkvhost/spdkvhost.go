@@ -21,6 +21,8 @@ package spdkvhost
 import (
 	//"encoding/json"
 	"fmt"
+	"os"
+
 	//"os/exec"
 	"path"
 	//"strconv"
@@ -34,7 +36,7 @@ import (
 )
 
 const (
-	SectorSize = 4096
+	SectorSize = 512
 	//SpdkRpcPath = "/home/xliu2/spdk-repos/spdk-intr/scripts/rpc.py"
 	//spdkLvolBdevSize = 8192 //MB
 
@@ -70,7 +72,7 @@ func NewSpdkProvider() (*SpdkProvider, error) {
 		}
 	}
 
-	spdkClient, err := spdk.NewClient(spdkVhostSockPath, nil)
+	spdkClient, err := spdk.NewClient(spdkAppSocketPath, os.Stdout)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +102,7 @@ func (v *SpdkProvider) CreatePool(poolName, dataFile, metaFile string, blockSize
 		spdk.BdevAioCreateArgs{
 			Name:      poolName,
 			Filename:  dataFile,
-			BlockSize: 4096})
+			BlockSize: SectorSize})
 
 	if err != nil {
 		return err
@@ -133,7 +135,7 @@ func (v *SpdkProvider) ReloadPool(poolName, dataFile, metaFile string, blockSize
 func (v *SpdkProvider) CreateDevice(poolName string, deviceID uint32, size uint64) error {
 	var err error
 
-	deviceIDStr := fmt.Sprintf("%s", deviceID)
+	deviceIDStr := fmt.Sprintf("%d", deviceID)
 	_, err = spdk.BdevLvolCreate(context.Background(), v.client,
 		spdk.BdevLvolCreateArgs{
 			LvolName:      deviceIDStr,
@@ -147,7 +149,7 @@ func (v *SpdkProvider) CreateDevice(poolName string, deviceID uint32, size uint6
 // ActivateDevice activates the given thin-device using the 'thin' target
 func (v *SpdkProvider) ActivateDevice(poolName string, deviceName string, deviceID uint32, size uint64, external string) error {
 	var err error
-	deviceIDStr := fmt.Sprintf("%s", deviceID)
+	deviceIDStr := fmt.Sprintf("%d", deviceID)
 
 	_, err = spdk.VhostCreateBlkController(context.Background(), v.client,
 		spdk.VhostCreateBlkControllerArgs{
@@ -171,11 +173,11 @@ func (v *SpdkProvider) ResumeDevice(deviceName string) error {
 // ?Caller needs to suspend and resume device if it is active.
 func (v *SpdkProvider) CreateSnapshot(poolName string, deviceID uint32, baseDeviceID uint32) error {
 	var err error
-	deviceIDStr := fmt.Sprintf("%s", deviceID)
+	deviceIDStr := fmt.Sprintf("%d", deviceID)
 
 	_, err = spdk.BdevLvolSnapshot(context.Background(), v.client,
 		spdk.BdevLvolSnapshotArgs{
-			LvolName:     poolName + "/" + fmt.Sprintf("%s", baseDeviceID),
+			LvolName:     poolName + "/" + fmt.Sprintf("%d", baseDeviceID),
 			SnapshotName: deviceIDStr})
 
 	return err
@@ -184,7 +186,7 @@ func (v *SpdkProvider) CreateSnapshot(poolName string, deviceID uint32, baseDevi
 // delete a device
 func (v *SpdkProvider) DeleteDevice(poolName string, deviceID uint32) error {
 	var err error
-	deviceIDStr := fmt.Sprintf("%s", deviceID)
+	deviceIDStr := fmt.Sprintf("%d", deviceID)
 
 	_, err = spdk.BdevLvolDelete(context.Background(), v.client,
 		spdk.BdevLvolDeleteArgs{
@@ -255,18 +257,31 @@ func (v *SpdkProvider) UnDevHosting(devHostPath string) error {
 // Info outputs device information (see "bdev_get_bdevs -b bdev_name").
 // If device name is empty, all device infos will be returned.
 func (v *SpdkProvider) Info(deviceName string) ([]*dmsetup.DeviceInfo, error) {
-	var devInfo []*dmsetup.DeviceInfo
-	info := &dmsetup.DeviceInfo{}
+	//var devInfo []*dmsetup.DeviceInfo
 
+	devInfo := make([]*dmsetup.DeviceInfo, 1)
+
+	info := &dmsetup.DeviceInfo{}
 	info.Name = deviceName
-	info.TableLive = true
+
+	_, err := spdk.VhostGetControllers(context.Background(), v.client,
+		spdk.VhostGetControllersArgs{
+			Name: vhostBlkPrefix + deviceName})
+	if err != nil {
+		info.TableLive = false
+	} else {
+		info.TableLive = true
+	}
 
 	devInfo[0] = info
 	return devInfo, nil
 }
 
 func (v *SpdkProvider) InfoPool(poolName string) ([]*dmsetup.DeviceInfo, error) {
-	var devInfo []*dmsetup.DeviceInfo
+	//var devInfo []*dmsetup.DeviceInfo
+
+	devInfo := make([]*dmsetup.DeviceInfo, 1)
+
 	info := &dmsetup.DeviceInfo{}
 
 	info.BlockDeviceName = "nvme0n1"
