@@ -18,6 +18,7 @@
 
 package devmapper
 
+/*
 import (
 	"context"
 	_ "crypto/sha256"
@@ -52,7 +53,9 @@ func TestSnapshotterSuite(t *testing.T) {
 		_, loopMetaDevice := createLoopbackDevice(t, root)
 
 		poolName := fmt.Sprintf("containerd-snapshotter-suite-pool-%d", time.Now().Nanosecond())
-		err := dmsetup.CreatePool(poolName, loopDataDevice, loopMetaDevice, 64*1024/dmsetup.SectorSize)
+
+		poolProvider, err := GetBlockProvider("dmsetup")
+		err = poolProvider.CreatePool(poolName, loopDataDevice, loopMetaDevice, 64*1024/poolProvider.SectorSize())
 		assert.NilError(t, err, "failed to create pool %q", poolName)
 
 		config := &Config{
@@ -140,3 +143,4 @@ func testUsage(t *testing.T, snapshotter snapshots.Snapshotter) {
 	assert.Assert(t, layer2Usage.Size > sizeBytes)
 	assert.Assert(t, layer2Usage.Size < sizeBytes+256*dmsetup.SectorSize)
 }
+*/

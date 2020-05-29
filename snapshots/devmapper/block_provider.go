@@ -38,7 +38,7 @@ type blockProvider interface {
 	RemovePool(PoolName string, opts ...dm.DeactDeviceOpt) error
 
 	// CreateDevice sends "create_thin <deviceID>" message to the given thin-pool
-	CreateDevice(poolName string, deviceID uint32) error
+	CreateDevice(poolName string, deviceID uint32, size uint64) error
 	// CreateSnapshot sends "create_snap" message to the given thin-pool.
 	// Caller needs to suspend and resume device if it is active.
 	CreateSnapshot(poolName string, deviceID uint32, baseDeviceID uint32) error
@@ -73,7 +73,7 @@ type blockProvider interface {
 	//Seems it is only used inside dmsetup
 	// BlockDeviceSize returns size of block device in bytes
 	//BlockDeviceSize(devicePath string) (uint64, error)
-	//BlockSectorSize() uint16
+	SectorSize() uint32
 
 	GetUsage(deviceName string) (int64, error)
 

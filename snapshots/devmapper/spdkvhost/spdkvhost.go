@@ -36,7 +36,7 @@ import (
 const (
 	SectorSize = 4096
 	//SpdkRpcPath = "/home/xliu2/spdk-repos/spdk-intr/scripts/rpc.py"
-	spdkLvolBdevSize = 8192 //MB
+	//spdkLvolBdevSize = 8192 //MB
 
 	spdkAppPath       = "/root/go/src/github.com/spdk/spdk/app/vhost/vhost"
 	spdkAppSocketPath = "/var/tmp/spdk.sock"
@@ -47,37 +47,39 @@ const (
 )
 
 type SpdkProvider struct {
+	client *spdk.Client
 }
 
 var spdkApp *spdk.App
-var spdkClient *spdk.Client
 
 func NewSpdkProvider() (*SpdkProvider, error) {
 	var err error
 
-	optsFunc := []spdk.AppOption{}
+	if false {
+		optsFunc := []spdk.AppOption{}
 
-	optsFunc = append(optsFunc, spdk.WithSpdkApp(spdkAppPath))
-	optsFunc = append(optsFunc, spdk.WithAppSocket(spdkAppSocketPath))
-	optsFunc = append(optsFunc, spdk.WithVhostSockPath(spdkVhostSockPath))
-	//optsFunc = append(optsFunc, spdk.WithLogOutput(os.Stdout))
+		optsFunc = append(optsFunc, spdk.WithSpdkApp(spdkAppPath))
+		optsFunc = append(optsFunc, spdk.WithAppSocket(spdkAppSocketPath))
+		optsFunc = append(optsFunc, spdk.WithVhostSockPath(spdkVhostSockPath))
+		//optsFunc = append(optsFunc, spdk.WithLogOutput(os.Stdout))
 
-	//spdkApp, err = spdk.AppRun(optsFunc...)
-	err = nil
+		spdkApp, err = spdk.AppRun(optsFunc...)
+		err = nil
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	spdkClient, err := spdk.NewClient(spdkVhostSockPath, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	spdkClient, err = spdk.NewClient(spdkVhostSockPath, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return &SpdkProvider{}, nil
+	return &SpdkProvider{client: spdkClient}, nil
 }
 
 func (v *SpdkProvider) Close() {
-	spdkClient.Close()
+	v.client.Close()
 	//spdk.AppTerm(spdkApp)
 }
 
@@ -85,12 +87,16 @@ func (v *SpdkProvider) ProviderName() string {
 	return "spdkvhost"
 }
 
+func (v *SpdkProvider) SectorSize() uint32 {
+	return SectorSize
+}
+
 // CreatePool creates a device with the given name, data and metadata file and block size
 // Parameter example: poolName = "containerd image pool"; dataFile = "/dev/nvme0n1"
 func (v *SpdkProvider) CreatePool(poolName, dataFile, metaFile string, blockSizeSectors uint32) error {
 	var err error
 
-	_, err = spdk.BdevAioCreate(context.Background(), spdkClient,
+	_, err = spdk.BdevAioCreate(context.Background(), v.client,
 		spdk.BdevAioCreateArgs{
 			Name:      poolName,
 			Filename:  dataFile,
@@ -101,7 +107,7 @@ func (v *SpdkProvider) CreatePool(poolName, dataFile, metaFile string, blockSize
 	}
 
 	// TODO: clear the bdevs automatically examined
-	_, err = spdk.BdevLvolCreateLvstore(context.Background(), spdkClient,
+	_, err = spdk.BdevLvolCreateLvstore(context.Background(), v.client,
 		spdk.BdevLvolCreateLvstoreArgs{
 			BdevName: poolName,
 			LvsName:  poolName})
@@ -113,7 +119,7 @@ func (v *SpdkProvider) CreatePool(poolName, dataFile, metaFile string, blockSize
 func (v *SpdkProvider) ReloadPool(poolName, dataFile, metaFile string, blockSizeSectors uint32) error {
 	var err error
 
-	_, err = spdk.BdevAioCreate(context.Background(), spdkClient,
+	_, err = spdk.BdevAioCreate(context.Background(), v.client,
 		spdk.BdevAioCreateArgs{
 			Name:      poolName,
 			Filename:  dataFile,
@@ -124,14 +130,14 @@ func (v *SpdkProvider) ReloadPool(poolName, dataFile, metaFile string, blockSize
 }
 
 // CreateDevice sends "bdev_lvol_create -t -l LVS_NAME lvol_name size"
-func (v *SpdkProvider) CreateDevice(poolName string, deviceID uint32) error {
+func (v *SpdkProvider) CreateDevice(poolName string, deviceID uint32, size uint64) error {
 	var err error
 
 	deviceIDStr := fmt.Sprintf("%s", deviceID)
-	_, err = spdk.BdevLvolCreate(context.Background(), spdkClient,
+	_, err = spdk.BdevLvolCreate(context.Background(), v.client,
 		spdk.BdevLvolCreateArgs{
 			LvolName:      deviceIDStr,
-			Size:          spdkLvolBdevSize,
+			Size:          int64(size / 1024 / 1024),
 			ThinProvision: true,
 			LvsName:       poolName})
 
@@ -143,7 +149,7 @@ func (v *SpdkProvider) ActivateDevice(poolName string, deviceName string, device
 	var err error
 	deviceIDStr := fmt.Sprintf("%s", deviceID)
 
-	_, err = spdk.VhostCreateBlkController(context.Background(), spdkClient,
+	_, err = spdk.VhostCreateBlkController(context.Background(), v.client,
 		spdk.VhostCreateBlkControllerArgs{
 			DevName: poolName + "/" + deviceIDStr,
 			Ctrlr:   vhostBlkPrefix + deviceName})
@@ -167,7 +173,7 @@ func (v *SpdkProvider) CreateSnapshot(poolName string, deviceID uint32, baseDevi
 	var err error
 	deviceIDStr := fmt.Sprintf("%s", deviceID)
 
-	_, err = spdk.BdevLvolSnapshot(context.Background(), spdkClient,
+	_, err = spdk.BdevLvolSnapshot(context.Background(), v.client,
 		spdk.BdevLvolSnapshotArgs{
 			LvolName:     poolName + "/" + fmt.Sprintf("%s", baseDeviceID),
 			SnapshotName: deviceIDStr})
@@ -180,7 +186,7 @@ func (v *SpdkProvider) DeleteDevice(poolName string, deviceID uint32) error {
 	var err error
 	deviceIDStr := fmt.Sprintf("%s", deviceID)
 
-	_, err = spdk.BdevLvolDelete(context.Background(), spdkClient,
+	_, err = spdk.BdevLvolDelete(context.Background(), v.client,
 		spdk.BdevLvolDeleteArgs{
 			Name: poolName + "/" + deviceIDStr})
 
@@ -190,7 +196,7 @@ func (v *SpdkProvider) DeleteDevice(poolName string, deviceID uint32) error {
 func (v *SpdkProvider) DeactivateDevice(deviceName string, opts ...dmsetup.DeactDeviceOpt) error {
 	var err error
 
-	_, err = spdk.VhostDeleteController(context.Background(), spdkClient,
+	_, err = spdk.VhostDeleteController(context.Background(), v.client,
 		spdk.VhostDeleteControllerArgs{Ctrlr: vhostBlkPrefix + deviceName})
 
 	return err
@@ -200,7 +206,7 @@ func (v *SpdkProvider) DeactivateDevice(deviceName string, opts ...dmsetup.Deact
 func (v *SpdkProvider) RemovePool(poolName string, opts ...dmsetup.DeactDeviceOpt) error {
 	var err error
 
-	_, err = spdk.BdevLvolDeleteLvstore(context.Background(), spdkClient,
+	_, err = spdk.BdevLvolDeleteLvstore(context.Background(), v.client,
 		spdk.BdevLvolDeleteLvstoreArgs{
 			LvsName: poolName})
 
@@ -290,7 +296,7 @@ func XXX() {
 		} else {
 			var err error
 
-			respLvs, err := spdk.BdevLvolGetLvstores(context.Background(), spdkClient,
+			respLvs, err := spdk.BdevLvolGetLvstores(context.Background(), v.client,
 				spdk.BdevLvolGetLvstoresArgs{LvsName: poolName})
 			if err {
 				return ""
@@ -298,7 +304,7 @@ func XXX() {
 
 			bdevName := respLvs[0].BaseBdev
 
-			respBdev, err := spdk.BdevGetBdevs(context.Background(), spdkClient,
+			respBdev, err := spdk.BdevGetBdevs(context.Background(), v.client,
 				spdk.BdevGetBdevsArgs{Name: bdevName})
 			if err {
 				return ""

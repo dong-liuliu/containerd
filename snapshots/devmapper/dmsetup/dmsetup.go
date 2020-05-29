@@ -82,6 +82,10 @@ func (dm *DmProvider) RemovePool(PoolName string, opts ...DeactDeviceOpt) error 
 	return dm.DeactivateDevice(PoolName, opts...)
 }
 
+func (dm *DmProvider) SectorSize() uint32 {
+	return SectorSize
+}
+
 // CreatePool creates a device with the given name, data and metadata file and block size (see "dmsetup create")
 func (dm *DmProvider) CreatePool(poolName, dataFile, metaFile string, blockSizeSectors uint32) error {
 	thinPool, err := makeThinPoolMapping(dataFile, metaFile, blockSizeSectors)
@@ -138,7 +142,7 @@ func makeThinPoolMapping(dataFile, metaFile string, blockSizeSectors uint32) (st
 }
 
 // CreateDevice sends "create_thin <deviceID>" message to the given thin-pool
-func (dm *DmProvider) CreateDevice(poolName string, deviceID uint32) error {
+func (dm *DmProvider) CreateDevice(poolName string, deviceID uint32, size uint64) error {
 	_, err := dmsetup("message", poolName, "0", fmt.Sprintf("create_thin %d", deviceID))
 	return err
 }

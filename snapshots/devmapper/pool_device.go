@@ -239,7 +239,7 @@ func (p *PoolDevice) CreateThinDevice(ctx context.Context, deviceName string, vi
 // createDevice creates thin device
 func (p *PoolDevice) createDevice(ctx context.Context, info *DeviceInfo) error {
 	if err := p.transition(ctx, info.Name, Creating, Created, func() error {
-		return p.provider.CreateDevice(p.poolName, info.DeviceID)
+		return p.provider.CreateDevice(p.poolName, info.DeviceID, info.Size)
 	}); err != nil {
 		return errors.Wrapf(err, "failed to create new thin device %q (dev: %d)", info.Name, info.DeviceID)
 	}
