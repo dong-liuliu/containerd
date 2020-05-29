@@ -21,8 +21,12 @@ import (
 	"io/ioutil"
 	"os"
 
+	"path"
+
 	"github.com/containerd/containerd/log"
 	"github.com/pkg/errors"
+
+	spdk "github.com/containerd/containerd/snapshots/devmapper/spdkvhost"
 )
 
 var tempMountLocation = getTempDir()
@@ -47,6 +51,29 @@ func WithTempMount(ctx context.Context, mounts []Mount, f func(root string) erro
 			log.G(ctx).WithError(uerr).WithField("dir", root).Errorf("failed to remove mount temp dir")
 		}
 	}()
+
+	if len(mounts) == 1 {
+		vhostSource := mounts[0].Source
+		devDir := path.Dir(vhostSource)
+		if devDir == spdk.SpdkVhostNodePath {
+			spdkProvider, err := spdk.NewSpdkProvider()
+			if err != nil {
+				return err
+			}
+			defer spdkProvider.Close()
+
+			devHostPath, err := spdkProvider.DevHosting(vhostSource)
+			if err != nil {
+				return err
+			}
+			defer spdkProvider.UnDevHosting(devHostPath)
+
+			mounts[0].Source = devHostPath
+			defer func() {
+				mounts[0].Source = vhostSource
+			}()
+		}
+	}
 
 	// We should do defer first, if not we will not do Unmount when only a part of Mounts are failed.
 	defer func() {

@@ -57,7 +57,7 @@ type blockProvider interface {
 
 	// Version returns "dmsetup version" output
 	Version() (string, error)
-	// GetFullDevicePath returns full path for the given device name (like "/dev/mapper/name", or "<vhost-socket-dir>/vhost-socket-name")
+	// GetFullDevicePath returns full path for the given device name (like "/dev/mapper/name", or a kata vhost compatable path)
 	GetFullDevicePath(deviceName string) string
 	// GetFullDevicePath returns full path for the given pool name (like "/dev/mapper/pool-name", or "/<pool-device-path>/<pool-device-name>")
 	GetFullPoolPath(poolDir, poolName string) string

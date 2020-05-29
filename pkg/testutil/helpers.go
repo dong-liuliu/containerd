@@ -29,7 +29,7 @@ import (
 var rootEnabled bool
 
 func init() {
-	flag.BoolVar(&rootEnabled, "test.root", false, "enable tests that require root")
+	flag.BoolVar(&rootEnabled, "test.root", true, "enable tests that require root")
 }
 
 // DumpDir prints the contents of the directory to the testing logger.

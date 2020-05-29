@@ -25,7 +25,7 @@ import (
 	"os"
 	"os/exec"
 
-	//"path/filepath"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -49,6 +49,7 @@ const (
 )
 
 func TestPoolDevice(t *testing.T) {
+	testPoolDevice(t, "dmsetup")
 	testPoolDevice(t, "spdkvhost")
 }
 
@@ -113,50 +114,50 @@ func testPoolDevice(t *testing.T, providerName string) {
 	t.Run("CreateThinDevice", func(t *testing.T) {
 		testCreateThinDevice(t, pool)
 	})
-	/*
-		// Make ext4 filesystem on 'thin-1'
-		t.Run("MakeFileSystem", func(t *testing.T) {
-			testMakeFileSystem(t, pool)
-		})
 
-		// Mount 'thin-1' and write v1 test file on 'thin-1' device
-		err = mount.WithTempMount(ctx, getMounts(pool, thinDevice1), func(thin1MountPath string) error {
-			// Write v1 test file on 'thin-1' device
-			thin1TestFilePath := filepath.Join(thin1MountPath, "TEST")
-			err := ioutil.WriteFile(thin1TestFilePath, []byte("test file (v1)"), 0700)
-			assert.NilError(t, err, "failed to write test file v1 on '%s' volume", thinDevice1)
+	// Make ext4 filesystem on 'thin-1'
+	t.Run("MakeFileSystem", func(t *testing.T) {
+		testMakeFileSystem(t, pool)
+	})
 
-			return nil
-		})
-	*/
+	// Mount 'thin-1' and write v1 test file on 'thin-1' device
+	err = mount.WithTempMount(ctx, getMounts(pool, thinDevice1), func(thin1MountPath string) error {
+		// Write v1 test file on 'thin-1' device
+		thin1TestFilePath := filepath.Join(thin1MountPath, "TEST")
+		err := ioutil.WriteFile(thin1TestFilePath, []byte("test file (v1)"), 0700)
+		assert.NilError(t, err, "failed to write test file v1 on '%s' volume", thinDevice1)
+
+		return nil
+	})
+
 	// Take snapshot of 'thin-1'
 	t.Run("CreateSnapshotDevice", func(t *testing.T) {
 		testCreateSnapshot(t, pool)
 	})
-	/*
-		// Update TEST file on 'thin-1' to v2
-		err = mount.WithTempMount(ctx, getMounts(pool, thinDevice1), func(thin1MountPath string) error {
-			thin1TestFilePath := filepath.Join(thin1MountPath, "TEST")
-			err = ioutil.WriteFile(thin1TestFilePath, []byte("test file (v2)"), 0700)
-			assert.NilError(t, err, "failed to write test file v2 on 'thin-1' volume after taking snapshot")
 
-			return nil
-		})
+	// Update TEST file on 'thin-1' to v2
+	err = mount.WithTempMount(ctx, getMounts(pool, thinDevice1), func(thin1MountPath string) error {
+		thin1TestFilePath := filepath.Join(thin1MountPath, "TEST")
+		err = ioutil.WriteFile(thin1TestFilePath, []byte("test file (v2)"), 0700)
+		assert.NilError(t, err, "failed to write test file v2 on 'thin-1' volume after taking snapshot")
 
-		assert.NilError(t, err)
+		return nil
+	})
 
-		// Mount 'snap-1' and make sure TEST file is v1
-		err = mount.WithTempMount(ctx, getMounts(pool, snapDevice1), func(snap1MountPath string) error {
-			// Read test file from snapshot device and make sure it's v1
-			fileData, err := ioutil.ReadFile(filepath.Join(snap1MountPath, "TEST"))
-			assert.NilError(t, err, "couldn't read test file from '%s' device", snapDevice1)
-			assert.Equal(t, "test file (v1)", string(fileData), "test file content is invalid on snapshot")
+	assert.NilError(t, err)
 
-			return nil
-		})
+	// Mount 'snap-1' and make sure TEST file is v1
+	err = mount.WithTempMount(ctx, getMounts(pool, snapDevice1), func(snap1MountPath string) error {
+		// Read test file from snapshot device and make sure it's v1
+		fileData, err := ioutil.ReadFile(filepath.Join(snap1MountPath, "TEST"))
+		assert.NilError(t, err, "couldn't read test file from '%s' device", snapDevice1)
+		assert.Equal(t, "test file (v1)", string(fileData), "test file content is invalid on snapshot")
 
-		assert.NilError(t, err)
-	*/
+		return nil
+	})
+
+	assert.NilError(t, err)
+
 	t.Run("DeactivateDevice", func(t *testing.T) {
 		testDeactivateThinDevice(t, pool)
 	})
@@ -230,9 +231,17 @@ func testCreateThinDevice(t *testing.T, pool *PoolDevice) {
 }
 
 func testMakeFileSystem(t *testing.T, pool *PoolDevice) {
-	devicePath := pool.provider.GetFullDevicePath(thinDevice1)
+
+	devHostPath := pool.provider.GetFullDevicePath(thinDevice1)
+	println(devHostPath)
+	devHostPath, err := pool.provider.DevHosting(devHostPath)
+	assert.NilError(t, err, "failed to get a hosting path for host operation")
+	defer pool.provider.UnDevHosting(devHostPath)
+
+	println(devHostPath)
+
 	args := []string{
-		devicePath,
+		devHostPath,
 		"-E",
 		"nodiscard,lazy_itable_init=0,lazy_journal_init=0",
 	}

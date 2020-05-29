@@ -31,8 +31,9 @@ import (
 
 	"github.com/containerd/containerd/snapshots/devmapper/dmsetup"
 	spdk "github.com/dong-liuliu/spdkctrl"
+
 	//"github.com/pkg/errors"
-	//"golang.org/x/sys/unix"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -42,10 +43,18 @@ const (
 
 	spdkAppPath       = "/root/go/src/github.com/spdk/spdk/app/vhost/vhost"
 	spdkAppSocketPath = "/var/tmp/spdk.sock"
-	spdkVhostSockPath = "/var/run/kata-containers/vhost-user/block/sockets/"
-	vhostBlkPrefix    = "vhostblk-"
+
+	vhostBlkPrefix = "vhostblk-"
 	//snapshotPrefix    = "snap-"
 	//clonePrefix       = "clone-"
+)
+
+var (
+	// Kata compatible vhost path
+	spdkVhostBlkOCIPath     = "/var/run/kata-containers/vhost-user/block"
+	spdkVhostSockPath       = path.Join(spdkVhostBlkOCIPath, "sockets")
+	SpdkVhostNodePath       = path.Join(spdkVhostBlkOCIPath, "devices")
+	vhostUserBlkMajor   int = 241
 )
 
 type SpdkProvider struct {
@@ -156,6 +165,17 @@ func (v *SpdkProvider) ActivateDevice(poolName string, deviceName string, device
 			DevName: poolName + "/" + deviceIDStr,
 			Ctrlr:   vhostBlkPrefix + deviceName})
 
+	if err != nil {
+		return err
+	}
+
+	// mknod for this volume device
+	nodePath := path.Join(SpdkVhostNodePath, vhostBlkPrefix+deviceName)
+	nodeMajor := vhostUserBlkMajor
+	nodeMinor := deviceID
+
+	err = unix.Mknod(nodePath, unix.S_IFBLK, int(unix.Mkdev(uint32(nodeMajor), uint32(nodeMinor))))
+
 	return err
 }
 
@@ -201,6 +221,13 @@ func (v *SpdkProvider) DeactivateDevice(deviceName string, opts ...dmsetup.Deact
 	_, err = spdk.VhostDeleteController(context.Background(), v.client,
 		spdk.VhostDeleteControllerArgs{Ctrlr: vhostBlkPrefix + deviceName})
 
+	if err != nil {
+		return err
+	}
+	// delete mknod for this volume device
+	nodePath := path.Join(SpdkVhostNodePath, vhostBlkPrefix+deviceName)
+	err = os.Remove(nodePath)
+
 	return err
 }
 
@@ -211,6 +238,13 @@ func (v *SpdkProvider) RemovePool(poolName string, opts ...dmsetup.DeactDeviceOp
 	_, err = spdk.BdevLvolDeleteLvstore(context.Background(), v.client,
 		spdk.BdevLvolDeleteLvstoreArgs{
 			LvsName: poolName})
+	if err != nil {
+		return err
+	}
+
+	_, err = spdk.BdevAioDelete(context.Background(), v.client,
+		spdk.BdevAioDeleteArgs{
+			Name: poolName})
 
 	return err
 }
@@ -235,7 +269,8 @@ func (v *SpdkProvider) Version() (string, error) {
 
 // For lvol bdev, return its vhost-blk socket patch
 func (v *SpdkProvider) GetFullDevicePath(deviceName string) string {
-	return path.Join(spdkVhostSockPath, vhostBlkPrefix+deviceName)
+	nodePath := path.Join(SpdkVhostNodePath, vhostBlkPrefix+deviceName)
+	return nodePath
 }
 
 func (v *SpdkProvider) GetFullPoolPath(poolDir, pooName string) string {
@@ -245,12 +280,44 @@ func (v *SpdkProvider) GetFullPoolPath(poolDir, pooName string) string {
 
 // Create nbd dev for host to use for the vhost device
 func (v *SpdkProvider) DevHosting(devPath string) (string, error) {
-	return "", nil
+	devDir := path.Dir(devPath)
+	vhostName := path.Base(devPath)
+	if devDir != SpdkVhostNodePath {
+		return "", fmt.Errorf("Invalid vhost device")
+	}
+
+	// Get the base bdev of the vhost device
+	response, err := spdk.VhostGetControllers(context.Background(), v.client,
+		spdk.VhostGetControllersArgs{
+			Name: vhostName})
+	if err != nil {
+		return "", err
+	}
+
+	baseBdev := response[0].BackendSpecific["block"].(spdk.VhostBlkBackendSpecific).Bdev
+
+	// Create a nbd device for the base bdev
+	nbdResp, err := spdk.NbdStartDisk(context.Background(), v.client,
+		spdk.NbdStartDiskArgs{
+			BdevName: baseBdev,
+			// TODO: spdkctrl should be able to handle parameter with nil
+			NbdDevice: "/dev/nbd4"})
+	if err != nil {
+		return "", err
+	}
+
+	return nbdResp, nil
 }
 
 // Stop the nbd dev for host to use for the vhost device
 func (v *SpdkProvider) UnDevHosting(devHostPath string) error {
-	return nil
+	// Stop the nbd device
+
+	_, err := spdk.NbdStopDisk(context.Background(), v.client,
+		spdk.NbdStopDiskArgs{
+			NbdDevice: devHostPath})
+
+	return err
 }
 
 // TODO: fulfill or refactor Info function
