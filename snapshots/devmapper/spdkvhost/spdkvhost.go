@@ -81,7 +81,13 @@ func NewSpdkProvider() (*SpdkProvider, error) {
 		}
 	}
 
-	spdkClient, err := spdk.NewClient(spdkAppSocketPath, os.Stdout)
+	debug := false
+	output := os.Stdout
+	if debug == false {
+		output = nil
+	}
+
+	spdkClient, err := spdk.NewClient(spdkAppSocketPath, output)
 	if err != nil {
 		return nil, err
 	}
