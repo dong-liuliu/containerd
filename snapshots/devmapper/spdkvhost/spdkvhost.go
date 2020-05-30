@@ -45,7 +45,7 @@ const (
 	spdkAppSocketPath = "/var/tmp/spdk.sock"
 
 	vhostBlkPrefix = "vhostblk-"
-	//snapshotPrefix    = "snap-"
+	snapshotPrefix = "snap-"
 	//clonePrefix       = "clone-"
 )
 
@@ -195,6 +195,7 @@ func (v *SpdkProvider) ResumeDevice(deviceName string) error {
 	return nil
 }
 
+// TODO: here snapshot and clone are confused. View should do BdevLvolSnapshot, Prepare should do BdevLvolClone
 // CreateSnapshot sends "bdev_lvol_snapshot lvol_name snapshot name" message to the given thin-pool.
 // ?Caller needs to suspend and resume device if it is active.
 func (v *SpdkProvider) CreateSnapshot(poolName string, deviceID uint32, baseDeviceID uint32) error {
@@ -204,7 +205,16 @@ func (v *SpdkProvider) CreateSnapshot(poolName string, deviceID uint32, baseDevi
 	_, err = spdk.BdevLvolSnapshot(context.Background(), v.client,
 		spdk.BdevLvolSnapshotArgs{
 			LvolName:     poolName + "/" + fmt.Sprintf("%d", baseDeviceID),
-			SnapshotName: deviceIDStr})
+			SnapshotName: snapshotPrefix + deviceIDStr})
+
+	if err != nil {
+		return err
+	}
+
+	_, err = spdk.BdevLvolClone(context.Background(), v.client,
+		spdk.BdevLvolCloneArgs{
+			SnapshotName: poolName + "/" + snapshotPrefix + deviceIDStr,
+			CloneName:    deviceIDStr})
 
 	return err
 }
@@ -218,7 +228,16 @@ func (v *SpdkProvider) DeleteDevice(poolName string, deviceID uint32) error {
 		spdk.BdevLvolDeleteArgs{
 			Name: poolName + "/" + deviceIDStr})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	_, err = spdk.BdevLvolDelete(context.Background(), v.client,
+		spdk.BdevLvolDeleteArgs{
+			Name: poolName + "/" + snapshotPrefix + deviceIDStr})
+
+	// snapshot bdev may be not existing for CreateDevice
+	return nil
 }
 
 func (v *SpdkProvider) DeactivateDevice(deviceName string, opts ...dmsetup.DeactDeviceOpt) error {
