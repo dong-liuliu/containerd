@@ -324,9 +324,7 @@ func (v *SpdkProvider) DevHosting(devPath string) (string, error) {
 	// Create a nbd device for the base bdev
 	nbdResp, err := spdk.NbdStartDisk(context.Background(), v.client,
 		spdk.NbdStartDiskArgs{
-			BdevName: baseBdev,
-			// TODO: spdkctrl should be able to handle parameter with nil
-			NbdDevice: "/dev/nbd4"})
+			BdevName: baseBdev})
 	if err != nil {
 		return "", err
 	}
