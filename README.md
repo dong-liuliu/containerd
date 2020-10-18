@@ -13,6 +13,214 @@ containerd is designed to be embedded into a larger system, rather than being us
 
 ![architecture](design/architecture.png)
 
+## Evaluation on Container Rootfs on top of SPDK vhost
+
+This section will give a guide on how to run SPDK vhost-target to provide container rootfs to Kata containers by containerd ctr cmd.
+
+Currently, the POC demo can only do very limited operations, like: pull several container images into SPDK vhost, and then run some containers with SPDK serving container rootfs.
+
+### Required Specific Softwares
+
+* Kata Containers POC version
+* Containerd POC version
+* SPDK formal release like v20.0
+* or SPDK Interrupt Mode POC version for further exploration
+
+>  **Note: SPDK Interrupt Mode POC version is a minimal set of SPDK vhost target. It runs in interrupt mode and non-hugepage mode; vhost-blk device is its frontend, and Linux AIO block device is its backend.**
+
+### Evaluation Enviroment Setup
+
+* Open 5 SSH Terminals from A to E for operating
+
+* Prepare SPDK on TermA
+  
+  - Download POC version SPDK
+  
+  ```bash
+  go get github.com/spdk/spdk
+  cd $GOPATH/src/github.com/spdk/spdk
+  ```
+  
+  - Configure and compile it
+  
+  ```bash
+  ./configure && make -j18
+  ```
+  
+  - SPDK start and device assignment
+  
+  ```bash
+  # Environment Prepare
+  HUGEMEM=4096 PCI_WHITELIST="none" scripts/setup.sh
+  mkdir -p /var/run/kata-containers/vhost-user/block/sockets/
+  mkdir -p /var/run/kata-containers/vhost-user/block/devices/
+  rm -f /var/run/kata-containers/vhost-user/block/devices
+  ./app/vhost/vhost -S /var/run/kata-containers/vhost-user/block/sockets/ &
+  ```
+  
+  - >  **Or SPDK further exploration with interrupt mode and non-hugepage**
+ 
+  ```bash
+  go get github.com/spdk/spdk
+  cd $GOPATH/src/github.com/spdk/spdk
+
+  # Pull and checkout poc branch from https://review.spdk.io/gerrit/c/spdk/spdk/+/4584
+  # Replace <latest> with its newest version from the patch link
+  git fetch "https://review.spdk.io/gerrit/spdk/spdk" refs/changes/84/4584/<latest> && git checkout FETCH_HEAD
+  ./configure && make -j18
+  ```
+  
+  ```bash
+  # Environment Prepare
+  # hugepage is not required yet.
+  mkdir -p /var/run/kata-containers/vhost-user/block/sockets/
+  mkdir -p /var/run/kata-containers/vhost-user/block/devices/
+  rm -f /var/run/kata-containers/vhost-user/block/devices
+  ./app/vhost/vhost -E -s 2048 -S /var/run/kata-containers/vhost-user/block/sockets/ &
+  ```
+  
+  ```bash
+  #Use nvme1n1 as the pool device
+  dd if=/dev/zero of=/dev/nvme1n1 count=10 bs=4k
+  ./scripts/rpc.py  "bdev_aio_create" /dev/nvme1n1 devpool
+  ./scripts/rpc.py bdev_lvol_create_lvstore devpool devpool
+  ```
+
+* Prepare Kata-container on TermB
+  
+  - Download POC version Kata-runtime
+  
+  ```bash
+  go get github.com/kata-containers/runtime
+  
+  #pull and checkout poc branch from:
+  #repo: https://github.com/dong-liuliu/runtime
+  #branch: xliu2/vhost-rootfs
+  cd $GOPATH/src/github.com/kata-containers/runtime/
+  git remote add rootfs-poc https://github.com/dong-liuliu/runtime
+  git pull rootfs-poc
+  git checkout rootfs-poc/xliu2/vhost-rootfs
+  ```
+  
+  - Compile and Install
+  
+  ```bash
+  make -j18 && make install
+  ```
+  
+  - Vhost-user-blk enablement configure for Kata containers (/etc/kata-containers/configuration.toml)
+  
+  ```text
+  #In kata configuration file, enable following options:
+  enable_vhost_user_store = true
+  enable_hugepages = true
+  ```
+  
+  - >  **SPDK further exploratin configure for kata containers (/etc/kata-containers/configuration.toml)**
+
+```text
+  #In kata configuration file, enable following options:
+  enable_vhost_user_store = true
+  file_mem_backend = "/dev/shm"
+```
+
+* Prepare POC version Containerd on TermC
+  
+  - Download POC version Containerd
+  
+  ```bash
+  go get github.com/containerd/containerd
+  
+  #pull and checkout poc branch from:
+  #repo: https://github.com/dong-liuliu/containerd
+  #branch: xliu2/spdk-rootfs
+  cd $GOPATH/src/github.com/containerd/containerd
+  git remote add rootfs-poc https://github.com/dong-liuliu/containerd
+  git pull rootfs-poc
+  git checkout rootfs-poc/xliu2/spdk-rootfs
+  ```
+  
+  - Compile and install
+  
+  ```bash
+  make -j18 && make install
+  ```
+  
+  - SPDK vhost configure in containerd config (/etc/containerd/config.toml)
+  
+  ```text
+  [plugins]
+        [plugins.devmapper]
+    pool_name = "devpool"
+    root_path = "/var/lib/containerd/devmapper"
+    base_image_size = "10GB"
+    block_provider = "spdkvhost"
+    pool_path = ""
+       [plugins.linux]
+                runtime = "kata"
+  ```
+  
+  - Run containerd
+  
+  ```bash
+  modprobe nbd
+  mkdir -p /var/lib/containerd/devmapper
+  service containerd start
+
+  # Check and confirm devmapper is enabled
+  # Currently, spdkvhost snapshotter is one option for devmapper
+  ctr plugins ls
+  ```
+
+### Demo details
+
+- Pull Images Demo
+  
+  - Download 2 short container images on TermD
+  
+  ```bash
+  ctr images pull --snapshotter devmapper  docker.io/library/busybox:latest
+  ctr images pull --snapshotter devmapper  docker.io/library/hello-world:latest  
+  ```
+  
+  - Check SPDK’s Bdev status on TermA
+  
+  ```bash
+  ./scripts/rpc.py  "bdev_get_bdevs " 
+  # Several snapshot/clone bdevs have been created for images
+  ```
+
+- Run Containers Demo 
+  
+  - Run busybox container on TermD
+  
+  ```bash
+  ctr run --rm -t  --runtime "io.containerd.kata.v2" --snapshotter devmapper  docker.io/library/busybox:latest test1
+  
+  # directly input some cmds on the started container
+  hostname  #kata-container is returned
+  cat /proc/vmstat
+  ```
+  
+  - Run Hello-world container on TermE
+  
+  ```bash
+  ctr run  --rm -t  --runtime "io.containerd.kata.v2" --snapshotter devmapper docker.io/library/hello-world:latest test2
+  # Messages returned should be: Hello from Docker! ….
+  ```
+  
+  - Check SPDK’s vhost controller status on TermA
+  
+  ```bash
+  ./scripts/rpc.py "vhost_get_controllers"
+  # There are related vhost-blk devices generated for kata container to use as rootfs
+  ```
+
+
+
+
+
+
 ## Getting Started
 
 See our documentation on [containerd.io](https://containerd.io):
