@@ -28,6 +28,7 @@ import (
 	//"strconv"
 	//"strings"
 	"context"
+	"time"
 
 	"github.com/containerd/containerd/snapshots/devmapper/dmsetup"
 	spdk "github.com/dong-liuliu/spdkctrl"
@@ -328,6 +329,9 @@ func (v *SpdkProvider) DevHosting(devPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// Temp: Wait for NBD readiness
+	time.Sleep(time.Millisecond * 10)
 
 	return nbdResp, nil
 }
